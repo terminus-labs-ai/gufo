@@ -3,6 +3,7 @@
 #include <hip/hip_runtime.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <initializer_list>
 
 #include "src/core/hip/weight_upload.hpp"
@@ -256,6 +257,33 @@ struct Uploader {
   }
 };
 
+// Names the routed and head formats once at load, so a startup log shows
+// which kernels the model runs on.
+void LogFormats(const ModelWeights& w, const MtpWeights* mtp,
+                bool converted_head) {
+  std::string gate, up, down;
+  const auto add = [](std::string& names, const TensorRef& t) {
+    const std::string name(core::ToString(t.type));
+    if (!t.empty() && ("/" + names + "/").find("/" + name + "/") ==
+                          std::string::npos)
+      names += (names.empty() ? "" : "/") + name;
+  };
+  const auto layer = [&](const LayerWeights& l) {
+    add(gate, l.ffn_gate_exps);
+    add(up, l.ffn_up_exps);
+    add(down, l.ffn_down_exps);
+  };
+  std::for_each(w.layers.begin(), w.layers.end(), layer);
+  if (mtp != nullptr)
+    layer(mtp->block);
+  std::fprintf(stderr,
+               "qwen38_flash_next: routed experts gate=%s up=%s down=%s\n",
+               gate.c_str(), up.c_str(), down.c_str());
+  const std::string head(core::ToString(w.output.type));
+  std::fprintf(stderr, "qwen38_flash_next: output head %s%s\n", head.c_str(),
+               converted_head ? " (Q6_K -> Q8_0 at upload)" : "");
+}
+
 }  // namespace
 
 DeviceModel::~DeviceModel() {
@@ -281,7 +309,10 @@ std::unique_ptr<DeviceModel> DeviceModel::Upload(
     return supported(l.ffn_gate_exps) && supported(l.ffn_up_exps) &&
            supported(l.ffn_down_exps);
   };
-  if (!supported(w.token_embd) || !supported(w.output) ||
+  // A Q6_K output head is re-encoded as Q8_0 below, once its upload lands.
+  const bool convert_head = w.output.type == core::GgmlType::kQ6_K &&
+                            w.output.data != w.token_embd.data;
+  if (!supported(w.token_embd) || (!convert_head && !supported(w.output)) ||
       !std::all_of(w.layers.begin(), w.layers.end(), layer_supported) ||
       (mtp != nullptr && !layer_supported(mtp->block))) {
     return nullptr;
@@ -332,6 +363,31 @@ std::unique_ptr<DeviceModel> DeviceModel::Upload(
     NarrowActivations(static_cast<const float*>(c.source), c.destination, false,
                       c.count, nullptr);
   }
+  void* head_q6 = nullptr;
+  if (convert_head) {
+    const std::size_t count = w.output.ElementCount();
+    const std::size_t size = count / 32 * 34;
+    void* q8 = nullptr;
+    if (hipMalloc(&q8, size + kTailMargin) != hipSuccess) {
+      if (error_msg != nullptr)
+        *error_msg = "hipMalloc failed for the Q8_0 output head";
+      return nullptr;
+    }
+    m->allocations_.push_back(q8);
+    m->bytes_ += size + kTailMargin;
+    (void)hipMemsetAsync(static_cast<std::uint8_t*>(q8) + size, 0, kTailMargin,
+                         nullptr);
+    if (qfn_mmq_q6_K_to_q8_0(m->output_.data, q8,
+                             static_cast<std::int64_t>(count), nullptr) != 0) {
+      if (error_msg != nullptr)
+        *error_msg = "Q6_K -> Q8_0 output head conversion failed";
+      return nullptr;
+    }
+    head_q6 = m->output_.data;
+    m->output_.data = q8;
+    m->output_.type = core::GgmlType::kQ8_0;
+    m->max_q8_cols_ = std::max<std::size_t>(m->max_q8_cols_, w.output.cols);
+  }
   const auto status = hipDeviceSynchronize();
   if (status != hipSuccess) {
     if (error_msg != nullptr) {
@@ -345,6 +401,12 @@ std::unique_ptr<DeviceModel> DeviceModel::Upload(
     (void)hipFree(c.source);
     m->bytes_ -= c.count * sizeof(float) + kTailMargin;
   }
+  if (head_q6 != nullptr) {
+    std::erase(m->allocations_, head_q6);
+    (void)hipFree(head_q6);
+    m->bytes_ -= w.output.SizeBytes() + kTailMargin;
+  }
+  LogFormats(w, mtp, convert_head);
   return m;
 }
 

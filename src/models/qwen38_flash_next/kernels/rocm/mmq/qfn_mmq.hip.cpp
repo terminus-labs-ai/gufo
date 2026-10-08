@@ -357,7 +357,9 @@ static int moe_vector_projection(int weight_type, const void* W,
   constexpr const char* tag = "qfn_mmq_moe_vec";
   const auto type = static_cast<ggml_type>(weight_type);
   if (type != GGML_TYPE_Q4_K && type != GGML_TYPE_Q5_K &&
-      type != GGML_TYPE_Q5_1 && type != GGML_TYPE_Q8_0) {
+      type != GGML_TYPE_Q5_1 && type != GGML_TYPE_Q8_0 &&
+      type != GGML_TYPE_IQ3_S && type != GGML_TYPE_IQ4_XS &&
+      type != GGML_TYPE_IQ4_NL) {
     fprintf(stderr, "%s: unsupported weight type %d\n", tag, weight_type);
     return -1;
   }
@@ -522,6 +524,69 @@ extern "C" int qfn_mmq_q5_K_moe_raw(
                                             nullptr, nullptr);
 }
 
+extern "C" int qfn_mmq_iq3_s_moe_raw(
+        const void * W, const float * X, const int32_t * ids, float * out,
+        int M, int K, int n_tokens, int n_experts, int n_expert_used,
+        hipStream_t stream) {
+    return qfn_mmq_moe_impl<GGML_TYPE_IQ3_S>("qfn_mmq_iq3_s_moe_raw", W, X, ids, out, M, K,
+                                             n_tokens, n_experts, n_expert_used, stream,
+                                             nullptr, nullptr);
+}
+
+extern "C" int qfn_mmq_iq4_xs_moe_raw(
+        const void * W, const float * X, const int32_t * ids, float * out,
+        int M, int K, int n_tokens, int n_experts, int n_expert_used,
+        hipStream_t stream) {
+    return qfn_mmq_moe_impl<GGML_TYPE_IQ4_XS>("qfn_mmq_iq4_xs_moe_raw", W, X, ids, out, M, K,
+                                              n_tokens, n_experts, n_expert_used, stream,
+                                              nullptr, nullptr);
+}
+
+extern "C" int qfn_mmq_iq4_nl_moe_raw(
+        const void * W, const float * X, const int32_t * ids, float * out,
+        int M, int K, int n_tokens, int n_experts, int n_expert_used,
+        hipStream_t stream) {
+    return qfn_mmq_moe_impl<GGML_TYPE_IQ4_NL>("qfn_mmq_iq4_nl_moe_raw", W, X, ids, out, M, K,
+                                              n_tokens, n_experts, n_expert_used, stream,
+                                              nullptr, nullptr);
+}
+
+// One thread per Q6_K element; each 32-lane group forms one Q8_0 block. The
+// scale is rounded to F16 before quantizing, so every element stays within
+// half a stored Q8_0 step of its Q6_K value.
+__launch_bounds__(QK_K) static __global__ void qfn_q6_K_to_q8_0_kernel(
+        const block_q6_K * __restrict__ src, block_q8_0 * __restrict__ dst) {
+    const block_q6_K & b = src[blockIdx.x];
+    const int e = threadIdx.x;
+    const int ip = e / 128;
+    const int j = e % 128 / 32;
+    const int l = e % 32;
+    const int lo = (b.ql[64 * ip + l + (j & 1) * 32] >> ((j >> 1) * 4)) & 0xF;
+    const int hi = (b.qh[32 * ip + l] >> (2 * j)) & 3;
+    const float value = __half2float(b.d) * b.scales[8 * ip + l / 16 + 2 * j] *
+                        ((lo | (hi << 4)) - 32);
+    const float amax = warp_reduce_max<32>(fabsf(value));
+    const half d = __float2half(amax / 127.0f);
+    const float step = __half2float(d);
+    block_q8_0 & q = dst[blockIdx.x * (QK_K / QK8_0) + e / QK8_0];
+    q.qs[l] = step > 0.0f
+                  ? static_cast<int8_t>(fminf(fmaxf(roundf(value / step), -127.0f), 127.0f))
+                  : 0;
+    if (l == 0) q.d = d;
+}
+
+extern "C" int qfn_mmq_q6_K_to_q8_0(const void * src, void * dst, int64_t n,
+                                    hipStream_t stream) {
+    if (!src || !dst || n <= 0 || n % QK_K != 0) {
+        fprintf(stderr, "qfn_mmq_q6_K_to_q8_0: bad arguments n=%lld\n",
+                static_cast<long long>(n));
+        return -1;
+    }
+    qfn_q6_K_to_q8_0_kernel<<<static_cast<unsigned>(n / QK_K), QK_K, 0, stream>>>(
+        static_cast<const block_q6_K *>(src), static_cast<block_q8_0 *>(dst));
+    return hipGetLastError() == hipSuccess ? 0 : -3;
+}
+
 extern "C" int qfn_mmq_q4_K_moe_pair_unique(
     const void * W_a, const void * W_b, const float * X, const int32_t * ids,
     float * out_a, float * out_b, int M, int K, int n_tokens, int n_experts,
@@ -666,5 +731,11 @@ template void mul_mat_q_case<GGML_TYPE_Q4_K>(
 template void mul_mat_q_case<GGML_TYPE_Q5_1>(
     ggml_backend_hip_context&, const mmq_args&, hipStream_t);
 template void mul_mat_q_case<GGML_TYPE_Q5_K>(
+    ggml_backend_hip_context&, const mmq_args&, hipStream_t);
+template void mul_mat_q_case<GGML_TYPE_IQ3_S>(
+    ggml_backend_hip_context&, const mmq_args&, hipStream_t);
+template void mul_mat_q_case<GGML_TYPE_IQ4_XS>(
+    ggml_backend_hip_context&, const mmq_args&, hipStream_t);
+template void mul_mat_q_case<GGML_TYPE_IQ4_NL>(
     ggml_backend_hip_context&, const mmq_args&, hipStream_t);
 } // namespace qfn_mmq
