@@ -1,0 +1,33 @@
+The lighthouse keeper's log for the third week of October records a steady southwest wind, two fishing boats returning late, and a short power failure that lasted eleven minutes before the backup generator caught. She noted that the lens still turned by hand during the outage, as it had for a hundred years before electricity reached the island, and that the old clockwork mechanism needed only a drop of oil and a patient wrist.
+
+Later that evening she copied a small program from the harbour office into her notebook. It reads the tide table and reports the next high water:
+
+```python
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+
+
+@dataclass(frozen=True)
+class Tide:
+    when: datetime
+    height_m: float
+
+
+def next_high_water(tides: list[Tide], now: datetime) -> Tide | None:
+    """Return the first high tide strictly after `now`, or None."""
+    highs = [
+        t for i, t in enumerate(tides[1:-1], start=1)
+        if tides[i - 1].height_m < t.height_m > tides[i + 1].height_m
+    ]
+    upcoming = [t for t in highs if t.when > now]
+    return min(upcoming, key=lambda t: t.when, default=None)
+
+
+if __name__ == "__main__":
+    start = datetime(2026, 10, 21, 0, 0)
+    table = [Tide(start + timedelta(hours=h), 1.2 + (h % 12 - 6) ** 2 / 20)
+             for h in range(48)]
+    print(next_high_water(table, start + timedelta(hours=3)))
+```
+
+The harbour master warned that the function assumes evenly spaced readings and ignores the first and last rows, so a high tide at either edge of the table is silently missed. The keeper wrote beside it, in pencil, that the sea has never once agreed to start at the top of a page, and that she would
