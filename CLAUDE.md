@@ -37,13 +37,14 @@ $RUN ctest --preset gpu-fast --output-on-failure
 Stop production Gufo before GPU tests or probes: `docker stop gufo`. Leave it
 stopped if it was already down.
 
-`gpu-fast` baseline on `fd747a5` in gufo-dev: 125 tests, 122 pass, 3 skipped
-(`qwen3_tts_loader_test`, `qwen3_tts_tokenizer_test`,
-`qwen3_tts_reference_artifacts_test`: Qwen3-TTS artifacts absent). Any other
-skip or failure is a regression. This needs the 112 B `GdnRowSplitKernel`
-scratch allowance in `tools/ci/kernel-resources.json`: upstream made that file
-with Nix AMD clang 22, and gufo-dev (ROCm 7.2.3, GCC 15.3, its clang) differs.
-`kernel_resources_test` allowances for the gxs IQ kernels also live there.
+`gpu-fast` baseline in gufo-dev: unmodified `fd747a5` has 124 tests, 121 pass,
+3 skipped; `gxs` adds `qwen38_flash_next.iq_projection_ops` for 125 tests, 122
+pass, 3 skipped. The skips are `qwen3_tts_loader_test`,
+`qwen3_tts_tokenizer_test` and `qwen3_tts_reference_artifacts_test` (Qwen3-TTS
+artifacts absent). Any other skip or failure is a regression. This needs the
+112 B `GdnRowSplitKernel` scratch allowance in `tools/ci/kernel-resources.json`:
+upstream made that file with Nix AMD clang 22, and gufo-dev (ROCm 7.2.3, GCC
+15.3, its clang) differs.
 
 ## Reference probe
 
