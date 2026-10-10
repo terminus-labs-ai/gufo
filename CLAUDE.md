@@ -44,7 +44,8 @@ pass, 3 skipped. The skips are `qwen3_tts_loader_test`,
 artifacts absent). Any other skip or failure is a regression. This needs the
 112 B `GdnRowSplitKernel` scratch allowance in `tools/ci/kernel-resources.json`:
 upstream made that file with Nix AMD clang 22, and gufo-dev (ROCm 7.2.3, GCC
-15.3, its clang) differs.
+15.3, its clang) differs. The same file holds the gxs allowances for the 54 IQ
+`qfn_mmq::mul_mat_q` kernels (ggml types 20, 21 and 23) at their measured scratch.
 
 ## Reference probe
 
