@@ -226,6 +226,8 @@ public:
     std::uint32_t max_logit_rows{1};
     /// Longest speculative batch; bounds the recurrent snapshot storage.
     std::uint32_t max_speculative{1};
+    /// Storage of the trunk and MTP full-attention K/V caches.
+    KvType kv_type{KvType::kF16};
   };
 
   ~Executor();

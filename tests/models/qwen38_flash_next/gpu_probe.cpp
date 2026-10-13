@@ -3,6 +3,7 @@
 //
 // gpu_probe --model FIRST_SHARD.gguf --prompt TEXT [--reference]
 //           [--batch T] [--context N] [--dump logits.bin]
+//           [--kv-cache-type f16|q8_0]
 // Independent predictor oracle: --mtp-model MTP.gguf --mtp-audit
 // MTP cost calibration: --mtp-model MTP.gguf --cost-audit C (0 = all)
 //                      [--depth N] (default: 0, 4096, 32768)
@@ -88,6 +89,7 @@ int main(int argc, char** argv) {
   bool decode = false;
   bool mtp_audit = false;
   bool reference = false;
+  bool q8_kv = false;
   bool cost_audit = false;
   std::uint32_t cost_concurrency = 0;
   std::optional<std::uint32_t> cost_depth;
@@ -147,6 +149,13 @@ int main(int argc, char** argv) {
       decode_ids_path = next();
     } else if (arg == "--reference") {
       reference = true;
+    } else if (arg == "--kv-cache-type") {
+      const auto value = next();
+      if (value != "f16" && value != "q8_0") {
+        std::fprintf(stderr, "--kv-cache-type must be f16 or q8_0\n");
+        return 2;
+      }
+      q8_kv = value == "q8_0";
     } else if (arg == "--batch" || arg == "--context") {
       const auto value = next();
       auto& count = arg == "--batch" ? batch : context;
@@ -244,6 +253,7 @@ int main(int argc, char** argv) {
   q::rocm::Executor::Options options;
   options.max_batch = batch;
   options.max_logit_rows = std::min<std::uint32_t>(batch, 64);
+  options.kv_type = q8_kv ? q::rocm::KvType::kQ8 : q::rocm::KvType::kF16;
   if (mtp_audit || cost_audit)
     options.max_speculative = 8;
 

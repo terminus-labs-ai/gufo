@@ -46,6 +46,8 @@ struct ModelOptions {
   /// Fixed serving capacity used by the calibrated MTP cost model. Keeping
   /// it independent of scheduler timing preserves seeded request replay.
   std::uint32_t decode_concurrency = 1;
+  /// Stores trunk and MTP K/V as q8_0 (`--kv-cache-type=q8_0`), not F16.
+  bool q8_kv_cache = false;
 };
 
 class Session;
@@ -81,6 +83,9 @@ public:
   [[nodiscard]] bool HasMtp() const noexcept;
   [[nodiscard]] std::uint32_t DecodeConcurrency() const noexcept {
     return options_.decode_concurrency;
+  }
+  [[nodiscard]] bool Q8KvCache() const noexcept {
+    return options_.q8_kv_cache;
   }
   [[nodiscard]] std::string ModelName() const;
   [[nodiscard]] const Config& config() const noexcept;
