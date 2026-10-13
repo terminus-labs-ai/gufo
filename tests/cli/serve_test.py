@@ -40,6 +40,11 @@ def main():
         check(["serve", modality, "unexpected"], 2, "Unexpected argument")
         check(["serve", modality, "--port", "65536"], 2, "--port must")
         check(["serve", modality, "--host", "bad.address"], 2, "--host must")
+    # The KV cache type is validated before any model is opened.
+    for value in ("q4_0", "F16", ""):
+        check(["serve", "llm", f"--kv-cache-type={value}", "--model",
+               "/missing"], 2, "--kv-cache-type must be f16 or q8_0")
+    check(["serve", "llm", "--help"], 0, "--kv-cache-type")
     check(["serve", "image"], 2, "--model <DIR> is required")
     for modality in ("tts", "asr"):
         check(["serve", modality], 2, "--model <DIR> is required")

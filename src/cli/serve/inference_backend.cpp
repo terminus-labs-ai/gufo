@@ -201,7 +201,7 @@ std::vector<std::uint8_t> DeepSeekCompatibilityIdentity(
 std::vector<std::uint8_t> QwenFlashNextCompatibilityIdentity(
     std::string_view artifact_fingerprint, std::string_view mtp_fingerprint,
     bool has_mtp, std::uint32_t max_context, std::uint32_t max_draft_tokens,
-    std::uint32_t decode_concurrency) {
+    std::uint32_t decode_concurrency, bool q8_kv_cache) {
   if (!IsSha256Hex(artifact_fingerprint)) {
     throw std::invalid_argument(
         "Qwen3.8-Flash-Next disk cache requires an artifact fingerprint");
@@ -227,6 +227,9 @@ std::vector<std::uint8_t> QwenFlashNextCompatibilityIdentity(
            << "context_tokens=" << max_context << '\n'
            << "position_policy=absolute-v1\n"
            << "adapters=none\n";
+  // F16 keeps its original identity; q8_0 checkpoints never cross types.
+  if (q8_kv_cache)
+    identity << "kv_cache_type=q8_0\n";
   if (has_mtp) {
     identity << "draft_backend=qfn-mtp-v1\n"
              << "draft_artifact_id=" << core::kGgufIdentityScheme << ':'
@@ -2428,7 +2431,7 @@ public:
           .compatibility_identity = QwenFlashNextCompatibilityIdentity(
               artifact_fingerprint, use_mtp_ ? mtp_fingerprint : std::string{},
               use_mtp_, max_context_, max_draft_tokens_,
-              model_->DecodeConcurrency()),
+              model_->DecodeConcurrency(), model_->Q8KvCache()),
           .payload_version =
               models::qwen38_flash_next::Session::kSnapshotPayloadVersion,
       };
@@ -2963,6 +2966,7 @@ struct InferenceBackend::Impl {
     std::uint32_t max_context{0};
     bool supports_images{false};
     ReasoningOptions reasoning_defaults;
+    std::size_t session_state_bytes{0};
   };
 
   class ScheduledGenerationRequest final : public GenerationRequest {
@@ -3068,7 +3072,8 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
                             const TextSpeculativeConfig& speculative_config,
                             const TextDiskCacheConfig& disk_cache_config,
                             const std::string& vision_model_path,
-                            TextRunnerRamCacheOptions ram_cache_config) {
+                            TextRunnerRamCacheOptions ram_cache_config,
+                            bool q8_kv_cache) {
 #if defined(ENGINE_ENABLE_HIP)
   TextDiskCacheConfig resolved_disk_cache_config = disk_cache_config;
   std::string load_error;
@@ -3090,6 +3095,11 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
       return false;
     }
     max_context = static_cast<std::uint32_t>(native);
+  }
+  if (q8_kv_cache &&
+      reader->GetMetadataString("general.architecture") != "qwen4exp") {
+    SetError(error, "--kv-cache-type=q8_0 requires Qwen3.8-Flash-Next");
+    return false;
   }
 
   if (reader->GetMetadataString("general.architecture") == "deepseek4") {
@@ -3190,6 +3200,7 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
             .vision_model_path = vision_model_path,
             .decode_concurrency = static_cast<std::uint32_t>(
                 std::clamp<std::size_t>(session_count, 1, 8)),
+            .q8_kv_cache = q8_kv_cache,
         },
         &load_error);
     if (model == nullptr) {
@@ -3258,6 +3269,7 @@ bool InferenceBackend::load(const std::string& model_path, std::string* error,
   (void)disk_cache_config;
   (void)vision_model_path;
   (void)ram_cache_config;
+  (void)q8_kv_cache;
   SetError(error, "HTTP inference requires the HIP backend");
   return false;
 #endif
@@ -3548,6 +3560,11 @@ bool InferenceBackend::load(
     new_state->sampling_defaults.model = sampling::TextModelPreset::kQwen38;
     new_state->sampling_defaults.supplied = {};
     new_state->supports_images = model->VisionEncoder() != nullptr;
+    new_state->session_state_bytes = model->SessionBytes(
+        speculative_config.backend == TextSpeculativeBackend::kMtp
+            ? gufo::core::SessionMode::kSpeculative
+            : gufo::core::SessionMode::kAutoregressive,
+        max_context);
     auto runner = std::make_shared<QwenFlashNextTextRunner>(
         std::move(model), max_context,
         speculative_config.backend == TextSpeculativeBackend::kMtp,
@@ -3620,6 +3637,15 @@ std::uint32_t InferenceBackend::max_context() const {
 #if defined(ENGINE_ENABLE_HIP)
   const auto state = impl_->Snapshot();
   return state != nullptr ? state->max_context : 0;
+#else
+  return 0;
+#endif
+}
+
+std::size_t InferenceBackend::session_state_bytes() const {
+#if defined(ENGINE_ENABLE_HIP)
+  const auto state = impl_->Snapshot();
+  return state != nullptr ? state->session_state_bytes : 0;
 #else
   return 0;
 #endif

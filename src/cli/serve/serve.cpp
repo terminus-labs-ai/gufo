@@ -608,6 +608,7 @@ void PrintServeHelp(std::string_view program_name,
     std::size_t cache_disk_bytes =
         server::TextRunnerDiskCacheOptions::kDefaultCapacityBytes;
     std::size_t cache_disk_staging_bytes = 0;
+    std::string kv_cache_type = "f16";
     bool log_progress = false;
     std::string trace_path;
 
@@ -718,6 +719,9 @@ void PrintServeHelp(std::string_view program_name,
         "RAM limit for queued snapshots and each disk read "
         "(default: 0 = auto, at most the disk budget and 1/8 available RAM)",
         "Cache", &cache_disk_staging_bytes);
+    parser.AddOption("", "--kv-cache-type", "TYPE",
+                     "KV cache storage: f16 or q8_0 (q8_0: Qwen3.8-Flash-Next; default: f16)", "Cache",
+                     &kv_cache_type);
     parser.AddFlag("", "--log-progress",
                    "Log live prefill and decode progress (needs "
                    "--log-level=info or debug)",
@@ -1146,6 +1150,7 @@ int RunServe(std::span<const char* const> args) {
     std::size_t cache_disk_bytes =
         server::TextRunnerDiskCacheOptions::kDefaultCapacityBytes;
     std::size_t cache_disk_staging_bytes = 0;
+    std::string kv_cache_type = "f16";
     bool log_progress = false;
     std::string trace_path;
 
@@ -1252,6 +1257,9 @@ int RunServe(std::span<const char* const> args) {
         "RAM limit for queued snapshots and each disk read "
         "(default: 0 = auto, at most the disk budget and 1/8 available RAM)",
         "Cache", &cache_disk_staging_bytes);
+    llm_parser.AddOption("", "--kv-cache-type", "TYPE",
+                         "KV cache storage: f16 or q8_0 (q8_0: Qwen3.8-Flash-Next; default: f16)",
+                         "Cache", &kv_cache_type);
     llm_parser.AddFlag("", "--log-progress",
                        "Log live prefill and decode progress (needs "
                        "--log-level=info or debug)",
@@ -1316,6 +1324,10 @@ int RunServe(std::span<const char* const> args) {
         min_draft_tokens > draft_tokens ||
         draft_tokens > std::numeric_limits<std::uint32_t>::max()) {
       std::cerr << "Error: speculative draft limits are invalid\n";
+      return 2;
+    }
+    if (kv_cache_type != "f16" && kv_cache_type != "q8_0") {
+      std::cerr << "Error: --kv-cache-type must be f16 or q8_0\n";
       return 2;
     }
     const auto reasoning_defaults = ResolveReasoningDefaults(
@@ -1403,7 +1415,8 @@ int RunServe(std::span<const char* const> args) {
                        },
                        vision_model_path,
                        server::TextRunnerRamCacheOptions{
-                           .capacity_bytes = cache_ram_bytes})) {
+                           .capacity_bytes = cache_ram_bytes},
+                       kv_cache_type == "q8_0")) {
       std::cerr << "Error loading model '" << model << "': " << err << "\n";
       return 1;
     }
@@ -1451,7 +1464,9 @@ int RunServe(std::span<const char* const> args) {
         " sessions=" + std::to_string(session_count) + " context_tokens=" +
         std::to_string(backend->max_context()) + " speculative=" + speculation +
         " draft_limit=" + std::to_string(speculative_config.max_draft_tokens) +
-        " disk_cache=" + (cache_disk_directory.empty() ? "off" : "enabled"));
+        " disk_cache=" + (cache_disk_directory.empty() ? "off" : "enabled") +
+        " kv_cache_type=" + kv_cache_type + " session_state_bytes=" +
+        std::to_string(backend->session_state_bytes()));
   }
 
   // run() joins every request thread, so no hook call outlives it.

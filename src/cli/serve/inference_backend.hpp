@@ -81,7 +81,8 @@ public:
             const TextSpeculativeConfig& speculative_config = {},
             const TextDiskCacheConfig& disk_cache_config = {},
             const std::string& vision_model_path = {},
-            TextRunnerRamCacheOptions ram_cache_config = {});
+            TextRunnerRamCacheOptions ram_cache_config = {},
+            bool q8_kv_cache = false);
 
 #if defined(ENGINE_ENABLE_HIP)
   /// Installs a previously loaded model without duplicating mapped weights.
@@ -123,6 +124,8 @@ public:
   [[nodiscard]] bool supports_images() const override;
   [[nodiscard]] SamplingDefaults sampling_defaults() const override;
   [[nodiscard]] std::uint32_t max_context() const override;
+  /// Worst-case device state of one session (Qwen3.8-Flash-Next), else 0.
+  [[nodiscard]] std::size_t session_state_bytes() const;
   [[nodiscard]] std::vector<SessionState> session_states() const override;
   [[nodiscard]] ReasoningOptions reasoning_defaults() const override;
   [[nodiscard]] InitialOutputState initial_output_state(
