@@ -75,6 +75,61 @@ __device__ __forceinline__ float WaveSum(float v) {
   return v;
 }
 
+/// Eight cache values at column `col` (a multiple of 8) of row `pos`, in the
+/// KvType layout: F16 halves, or the raw Q8 bytes plus their block scale for
+/// KvHalves to expand once the load has landed (prefetches stay in flight).
+template<bool kQ8>
+__device__ __forceinline__ uint4 LoadKv(const __half* cache, std::size_t pos,
+                                        std::size_t width, std::size_t col) {
+  if constexpr (!kQ8) {
+    return *reinterpret_cast<const uint4*>(cache + (pos * width) + col);
+  } else {
+    const auto* row = reinterpret_cast<const std::int8_t*>(cache) +
+                      (pos * (width + (width / 16)));
+    const uint2 q = *reinterpret_cast<const uint2*>(row + col);
+    return make_uint4(
+        q.x, q.y, reinterpret_cast<const unsigned short*>(row + width)[col / 32],
+        0u);
+  }
+}
+template<bool kQ8>
+__device__ __forceinline__ uint4 KvHalves(uint4 raw) {
+  if constexpr (!kQ8) {
+    return raw;
+  } else {
+    const float scale = __half2float(__ushort_as_half(raw.z));
+    const auto* q = reinterpret_cast<const std::int8_t*>(&raw);
+    uint4 out;
+    auto* h = reinterpret_cast<__half*>(&out);
+#pragma unroll
+    for (int i = 0; i < 8; ++i)
+      h[i] = __float2half(static_cast<float>(q[i]) * scale);
+    return out;
+  }
+}
+/// Stores `v` at column `col` of row `pos`. Under kQ8 the 32 lanes of a
+/// wave store one aligned 32-value block together and share its scale.
+template<bool kQ8>
+__device__ __forceinline__ void StoreKvValue(__half* cache, std::size_t pos,
+                                             std::size_t width, std::size_t col,
+                                             float v) {
+  if constexpr (!kQ8) {
+    cache[(pos * width) + col] = __float2half(v);
+  } else {
+    auto* row = reinterpret_cast<std::int8_t*>(cache) +
+                (pos * (width + (width / 16)));
+    float amax = fabsf(v);
+    for (int offset = 16; offset > 0; offset >>= 1)
+      amax = fmaxf(amax, __shfl_xor(amax, offset, 32));
+    const __half scale = __float2half(amax / 127.0F);
+    const float s = __half2float(scale);
+    row[col] = static_cast<std::int8_t>(
+        s > 0.0F ? fminf(fmaxf(rintf(v / s), -127.0F), 127.0F) : 0.0F);
+    if (col % 32 == 0)
+      reinterpret_cast<__half*>(row + width)[col / 32] = scale;
+  }
+}
+
 /// Block-wide sum over kThreads threads; every thread receives the total.
 __device__ float BlockSum(float v, float* shared) {
   for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
@@ -1770,7 +1825,7 @@ __global__ void UnpackQGateKernel(const float* qg, std::uint32_t qg_stride,
 
 // Keep each head's original eight-wave reduction. Heads in a block share
 // rotary angles; normalization statistics remain independent.
-template<std::uint32_t kHeadsPerBlock>
+template<std::uint32_t kHeadsPerBlock, bool kQ8 = false>
 __global__ void PrepareAttentionKernel(
     const float* __restrict__ packed, std::uint32_t stride,
     const float* __restrict__ q_gamma, const float* __restrict__ k_gamma,
@@ -1824,8 +1879,8 @@ __global__ void PrepareAttentionKernel(
         gate[std::size_t(t) * width + head * d + tid] =
             row[head * 2 * d + d + tid];
       else
-        v_cache[std::size_t(*start_pos + t) * kv_width + head * d + tid] =
-            __float2half(row[2 * width + kv_width + head * d + tid]);
+        StoreKvValue<kQ8>(v_cache, *start_pos + t, kv_width, head * d + tid,
+                          row[2 * width + kv_width + head * d + tid]);
     }
   }
   __syncthreads();
@@ -1852,18 +1907,18 @@ __global__ void PrepareAttentionKernel(
         q[std::size_t(t) * width + head * d + tid] = lo;
         q[std::size_t(t) * width + head * d + tid + half] = hi;
       } else {
-        k_cache[std::size_t(*start_pos + t) * kv_width + head * d + tid] =
-            __float2half(lo);
-        k_cache[std::size_t(*start_pos + t) * kv_width + head * d + tid +
-                half] = __float2half(hi);
+        StoreKvValue<kQ8>(k_cache, *start_pos + t, kv_width, head * d + tid,
+                          lo);
+        StoreKvValue<kQ8>(k_cache, *start_pos + t, kv_width,
+                          head * d + tid + half, hi);
       }
     }
     if (tid >= rotary && tid < d) {
       if (query)
         q[std::size_t(t) * width + head * d + tid] = norm[j][tid];
       else
-        k_cache[std::size_t(*start_pos + t) * kv_width + head * d + tid] =
-            __float2half(norm[j][tid]);
+        StoreKvValue<kQ8>(k_cache, *start_pos + t, kv_width, head * d + tid,
+                          norm[j][tid]);
     }
   }
 }
@@ -1890,13 +1945,14 @@ __global__ void RopeKernel(float* x, std::uint32_t heads, std::uint32_t d,
   }
 }
 
+template<bool kQ8 = false>
 __global__ void StoreKvKernel(const float* src, __half* cache,
                               std::uint32_t row_dim,
                               const std::uint32_t* start_pos) {
   const std::uint32_t t = blockIdx.x;
   for (std::uint32_t i = threadIdx.x; i < row_dim; i += blockDim.x) {
-    cache[static_cast<std::size_t>(*start_pos + t) * row_dim + i] =
-        __float2half(src[static_cast<std::size_t>(t) * row_dim + i]);
+    StoreKvValue<kQ8>(cache, *start_pos + t, row_dim, i,
+                      src[static_cast<std::size_t>(t) * row_dim + i]);
   }
 }
 
@@ -2264,6 +2320,7 @@ __global__ void SelectMarkKernel(std::uint32_t* mask, const float* scores,
 /// more than one split each block writes (max, sum, unnormalized acc) to
 /// `partials[(t * heads + h) * splits + z]` and AttentionMergeKernel
 /// combines them, otherwise the normalized row goes straight to `out`.
+template<bool kQ8 = false>
 __global__ void AttentionKernel(const float* q, const __half* k_cache,
                                 const __half* v_cache,
                                 const std::uint32_t* mask,
@@ -2307,13 +2364,12 @@ __global__ void AttentionKernel(const float* q, const __half* k_cache,
   // context row (eight dims per lane); the partials are summed at the end.
   float acc[8] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
   const std::size_t kv_stride = static_cast<std::size_t>(kv_heads) * d;
-  const __half* k_head = k_cache + kvh * d;
-  const __half* v_head = v_cache + kvh * d;
 
-  // Loads eight contiguous halves as floats: one 16-byte load per lane, so a
-  // wave reads a whole 256-wide row at once.
-  const auto load8 = [&](const __half* row, float* out8) {
-    const uint4 packed = *reinterpret_cast<const uint4*>(row + (lane * 8));
+  // Loads eight contiguous halves of key/value row j as floats: one 16-byte
+  // load per lane, so a wave reads a whole 256-wide row at once.
+  const auto load8 = [&](const __half* cache, std::size_t j, float* out8) {
+    const uint4 packed =
+        KvHalves<kQ8>(LoadKv<kQ8>(cache, j, kv_stride, (kvh * d) + (lane * 8)));
     const auto* h2 = reinterpret_cast<const __half2*>(&packed);
 #pragma unroll
     for (std::uint32_t j = 0; j < 4; ++j) {
@@ -2339,7 +2395,7 @@ __global__ void AttentionKernel(const float* q, const __half* k_cache,
       float dot = 0.0f;
       if (j < n_kv) {
         float kv[8];
-        load8(k_head + (static_cast<std::size_t>(j) * kv_stride), kv);
+        load8(k_cache, j, kv);
 #pragma unroll
         for (std::uint32_t x = 0; x < 8; ++x) {
           dot += qv[x] * kv[x];
@@ -2368,7 +2424,7 @@ __global__ void AttentionKernel(const float* q, const __half* k_cache,
       const float w = p[slot];
       if (w != 0.0f) {
         float vv[8];
-        load8(v_head + (static_cast<std::size_t>(keys[slot]) * kv_stride), vv);
+        load8(v_cache, keys[slot], vv);
 #pragma unroll
         for (std::uint32_t x = 0; x < 8; ++x) {
           acc[x] += w * vv[x];
@@ -2951,7 +3007,7 @@ constexpr std::uint32_t kWmmaMaxMaskWords = 2048;
 /// four selections overlap far less than 32 (measured at 16k depth: 846
 /// versus 2,478 selected blocks against 512 per query).
 template<std::uint32_t kQueryRows, std::uint32_t kKeys, bool kPackHeads,
-         bool kLateV = false>
+         bool kLateV = false, bool kQ8 = false>
 __launch_bounds__(256, 2) __global__ void WmmaCausalAttentionKernel(
     const float* __restrict__ q, const float* __restrict__ gate,
     const __half* __restrict__ k_cache, const __half* __restrict__ v_cache,
@@ -3233,19 +3289,18 @@ __launch_bounds__(256, 2) __global__ void WmmaCausalAttentionKernel(
   static_assert(kKRegs * 256 == kKeys * (kHeadDim / 8), "K stages evenly");
   const std::uint32_t v_key = lane % kKeys;
   const std::uint32_t v_slice = (tid / kKeys) * (kVRegs * 8);
-  const auto* v_base =
-      v_cache + (static_cast<std::size_t>(kv_head) * kHeadDim) + v_slice;
-  const auto* k_base = k_cache + (static_cast<std::size_t>(kv_head) * kHeadDim);
+  const std::size_t v_col = (static_cast<std::size_t>(kv_head) * kHeadDim) +
+                            v_slice;
+  const std::size_t k_col = static_cast<std::size_t>(kv_head) * kHeadDim;
 
+  // Registers hold raw cache words; KvHalves expands them at LDS staging.
   const auto load_v = [&](const Tile& tile, uint4* dst) {
     const std::uint32_t key_position = tile_key(tile, v_key);
     const bool live = key_position < context_end;
-    const auto* src =
-        v_base +
-        (static_cast<std::size_t>(live ? key_position : 0) * kWmmaKvWidth);
 #pragma unroll
     for (std::uint32_t j = 0; j < kVRegs; ++j) {
-      dst[j] = live ? *reinterpret_cast<const uint4*>(src + (j * 8))
+      dst[j] = live ? LoadKv<kQ8>(v_cache, key_position, kWmmaKvWidth,
+                                  v_col + (j * 8))
                     : make_uint4(0u, 0u, 0u, 0u);
     }
   };
@@ -3257,12 +3312,9 @@ __launch_bounds__(256, 2) __global__ void WmmaCausalAttentionKernel(
       const std::uint32_t key_position = tile_key(tile, idx / (kHeadDim / 8));
       const std::uint32_t d8 = (idx % (kHeadDim / 8)) * 8;
       const bool live = key_position < context_end;
-      dst[n] =
-          live ? *reinterpret_cast<const uint4*>(
-                     k_base +
-                     (static_cast<std::size_t>(key_position) * kWmmaKvWidth) +
-                     d8)
-               : make_uint4(0u, 0u, 0u, 0u);
+      dst[n] = live ? LoadKv<kQ8>(k_cache, key_position, kWmmaKvWidth,
+                                  k_col + d8)
+                    : make_uint4(0u, 0u, 0u, 0u);
     }
   };
 
@@ -3287,7 +3339,7 @@ __launch_bounds__(256, 2) __global__ void WmmaCausalAttentionKernel(
       const std::uint32_t key_row = idx / (kHeadDim / 8);
       const std::uint32_t d8 = (idx % (kHeadDim / 8)) * 8;
       *reinterpret_cast<uint4*>(&kv_lds[(key_row * kWmmaKStride) + d8]) =
-          k_cur[n];
+          KvHalves<kQ8>(k_cur[n]);
     }
     SyncLds();
 
@@ -3322,7 +3374,8 @@ __launch_bounds__(256, 2) __global__ void WmmaCausalAttentionKernel(
     {
 #pragma unroll
       for (std::uint32_t j = 0; j < kVRegs; ++j) {
-        const auto* packed = reinterpret_cast<const __half*>(&v_cur[j]);
+        const uint4 halves = KvHalves<kQ8>(v_cur[j]);
+        const auto* packed = reinterpret_cast<const __half*>(&halves);
 #pragma unroll
         for (std::uint32_t i = 0; i < 8; ++i) {
           kv_lds[((v_slice + (j * 8) + i) * kVtStride) + v_key] = packed[i];
@@ -6064,15 +6117,25 @@ bool PrepareAttention(const float* packed, std::uint32_t stride,
                       std::uint32_t kv_heads, std::uint32_t d,
                       std::uint32_t rotary_dim, const std::uint32_t* start_pos,
                       float theta, float eps, hipStream_t stream,
-                      const qwen::vision::DeviceRope* rope, bool prefill) {
+                      const qwen::vision::DeviceRope* rope, bool prefill,
+                      KvType kv) {
+  // Q8 blocks are quantized per wave: whole waves must own each block.
+  const bool q8 = kv == KvType::kQ8;
   if (d == 0 || d > 256 || rotary_dim == 0 || rotary_dim > d ||
       rotary_dim % 2 != 0 || kv_heads == 0 ||
-      stride < static_cast<std::size_t>(2) * (heads + kv_heads) * d) {
+      stride < static_cast<std::size_t>(2) * (heads + kv_heads) * d ||
+      (q8 && (d % 32 != 0 || rotary_dim % 64 != 0))) {
     return false;
   }
   if (n_tokens == 0)
     return true;
-  if (!prefill && n_tokens < 32) {
+  if (q8) {
+    hipLaunchKernelGGL((PrepareAttentionKernel<1, true>),
+                       dim3(n_tokens, heads + kv_heads), dim3(kThreads), 0,
+                       stream, packed, stride, q_gamma, k_gamma, q, gate,
+                       k_cache, v_cache, heads, kv_heads, d, rotary_dim,
+                       start_pos, theta, eps, rope);
+  } else if (!prefill && n_tokens < 32) {
     hipLaunchKernelGGL((PrepareAttentionKernel<1>),
                        dim3(n_tokens, heads + kv_heads), dim3(kThreads), 0,
                        stream, packed, stride, q_gamma, k_gamma, q, gate,
@@ -6098,9 +6161,14 @@ void Rope(float* x, std::uint32_t n_tokens, std::uint32_t heads,
 
 void StoreKv(const float* src, __half* cache, std::uint32_t n_tokens,
              std::uint32_t row_dim, const std::uint32_t* start_pos,
-             hipStream_t stream) {
-  hipLaunchKernelGGL(StoreKvKernel, dim3(n_tokens), dim3(kThreads), 0, stream,
-                     src, cache, row_dim, start_pos);
+             hipStream_t stream, KvType kv) {
+  if (kv == KvType::kQ8) {
+    hipLaunchKernelGGL(StoreKvKernel<true>, dim3(n_tokens), dim3(kThreads), 0,
+                       stream, src, cache, row_dim, start_pos);
+  } else {
+    hipLaunchKernelGGL(StoreKvKernel<false>, dim3(n_tokens), dim3(kThreads), 0,
+                       stream, src, cache, row_dim, start_pos);
+  }
 }
 
 void StoreRows(const float* src, float* dst, std::uint32_t n_tokens,
@@ -6155,28 +6223,31 @@ void Attention(const float* q, const __half* k_cache, const __half* v_cache,
                float* partials, std::uint32_t splits, std::uint32_t n_tokens,
                const std::uint32_t* start_pos, std::uint32_t heads,
                std::uint32_t kv_heads, std::uint32_t d, std::uint32_t ratio,
-               hipStream_t stream) {
+               hipStream_t stream, KvType kv) {
   if (d != 256) {
     return;  // the kernel is written for the model's 256-wide heads
   }
   const std::uint32_t z = partials != nullptr ? std::max(splits, 1u) : 1u;
-  hipLaunchKernelGGL(AttentionKernel, dim3(heads, n_tokens, z), dim3(kThreads),
-                     0, stream, q, k_cache, v_cache, mask, mask_words, out,
-                     partials, start_pos, heads, kv_heads, d, ratio);
+  hipLaunchKernelGGL(kv == KvType::kQ8 ? AttentionKernel<true>
+                                       : AttentionKernel<false>,
+                     dim3(heads, n_tokens, z), dim3(kThreads), 0, stream, q,
+                     k_cache, v_cache, mask, mask_words, out, partials,
+                     start_pos, heads, kv_heads, d, ratio);
   if (z > 1) {
     hipLaunchKernelGGL(AttentionMergeKernel, dim3(heads, n_tokens),
                        dim3(kThreads), 0, stream, partials, out, heads, d, z);
   }
 }
 
-bool WmmaCausalAttention(const float* q, const float* gate,
-                         const __half* k_cache, const __half* v_cache,
-                         const std::uint32_t* mask, std::uint32_t mask_words,
-                         float* out, std::uint32_t n_tokens,
-                         std::uint32_t start_pos, std::uint32_t heads,
-                         std::uint32_t kv_heads, std::uint32_t d,
-                         std::uint32_t ratio, hipStream_t stream,
-                         bool last_only) {
+template<bool kQ8>
+bool LaunchWmmaCausalAttention(const float* q, const float* gate,
+                               const __half* k_cache, const __half* v_cache,
+                               const std::uint32_t* mask,
+                               std::uint32_t mask_words, float* out,
+                               std::uint32_t n_tokens, std::uint32_t start_pos,
+                               std::uint32_t heads, std::uint32_t kv_heads,
+                               std::uint32_t d, std::uint32_t ratio,
+                               hipStream_t stream, bool last_only) {
   if (heads != kWmmaQueryHeads || kv_heads != kWmmaKvHeads ||
       d != kWmmaHeadDim || ratio != kWmmaRatio || n_tokens == 0 ||
       (mask != nullptr && mask_words > kWmmaMaxMaskWords)) {
@@ -6193,12 +6264,15 @@ bool WmmaCausalAttention(const float* q, const float* gate,
     // next one shortens their overlapping register lifetimes.
     if (start_pos >= 65536) {
       hipLaunchKernelGGL(
-          (WmmaCausalAttentionKernel<kPackedQueries, kWmmaKeys, true, true>),
+          (WmmaCausalAttentionKernel<kPackedQueries, kWmmaKeys, true, true,
+                                     kQ8>),
           grid, dim3(kThreads), 0, stream, q, gate, k_cache, v_cache, mask,
           mask_words, out, start_pos, n_tokens, first_group);
     } else {
       hipLaunchKernelGGL(
-          (WmmaCausalAttentionKernel<kPackedQueries, kWmmaKeys, true>), grid,
+          (WmmaCausalAttentionKernel<kPackedQueries, kWmmaKeys, true, false,
+                                     kQ8>),
+          grid,
           dim3(kThreads), 0, stream, q, gate, k_cache, v_cache, mask,
           mask_words, out, start_pos, n_tokens, first_group);
     }
@@ -6210,10 +6284,25 @@ bool WmmaCausalAttention(const float* q, const float* gate,
       (n_tokens + kWmmaQueryRows - 1) / kWmmaQueryRows - first_group,
       kWmmaKvHeads * (kWmmaGqa / kWmmaHeads));
   hipLaunchKernelGGL(
-      (WmmaCausalAttentionKernel<kWmmaQueryRows, kWmmaKeys, false>), grid,
-      dim3(kThreads), 0, stream, q, gate, k_cache, v_cache, mask, mask_words,
-      out, start_pos, n_tokens, first_group);
+      (WmmaCausalAttentionKernel<kWmmaQueryRows, kWmmaKeys, false, false,
+                                 kQ8>),
+      grid, dim3(kThreads), 0, stream, q, gate, k_cache, v_cache, mask,
+      mask_words, out, start_pos, n_tokens, first_group);
   return true;
+}
+
+bool WmmaCausalAttention(const float* q, const float* gate,
+                         const __half* k_cache, const __half* v_cache,
+                         const std::uint32_t* mask, std::uint32_t mask_words,
+                         float* out, std::uint32_t n_tokens,
+                         std::uint32_t start_pos, std::uint32_t heads,
+                         std::uint32_t kv_heads, std::uint32_t d,
+                         std::uint32_t ratio, hipStream_t stream,
+                         bool last_only, KvType kv) {
+  return (kv == KvType::kQ8 ? LaunchWmmaCausalAttention<true>
+                            : LaunchWmmaCausalAttention<false>)(
+      q, gate, k_cache, v_cache, mask, mask_words, out, n_tokens, start_pos,
+      heads, kv_heads, d, ratio, stream, last_only);
 }
 
 __global__ void ExpertCountsKernel(const std::int32_t* ids,
