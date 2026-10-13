@@ -23,6 +23,15 @@ struct RollbackRows {
   float* rows[7]{};
 };
 
+/// Full-attention K/V cache storage. kF16 rows hold `width` halves. kQ8 rows
+/// hold `width` int8 values, then one F16 scale per 32 values (Q8_0 blocks
+/// with the scales gathered at the row end): 17/32 of the F16 bytes. The
+/// cache pointers keep their `__half*` type; kQ8 requires `width % 32 == 0`.
+enum class KvType : std::uint8_t { kF16, kQ8 };
+constexpr std::size_t KvRowHalves(KvType type, std::size_t width) {
+  return type == KvType::kQ8 ? (width / 2) + (width / 32) : width;
+}
+
 // Recurrent rollback keeps the state after the first token, then exact
 // FP32 keys/decays/betas/errors for later tokens. No inverse or quantization.
 constexpr std::size_t GdnRollbackRowFloats(std::uint32_t row,
@@ -484,7 +493,8 @@ bool PrepareAttention(const float* packed, std::uint32_t stride,
                       std::uint32_t rotary_dim, const std::uint32_t* start_pos,
                       float theta, float eps, hipStream_t stream,
                       const qwen::vision::DeviceRope* rope = nullptr,
-                      bool prefill = false, const YarnRope& yarn = {});
+                      bool prefill = false, const YarnRope& yarn = {},
+                      KvType kv = KvType::kF16);
 
 /// NEOX partial rotary on x [t][heads][d] at positions start_pos + t.
 /// Positions are read from device memory (`start_pos` points at the
@@ -501,7 +511,7 @@ void Rope(float* x, std::uint32_t n_tokens, std::uint32_t heads,
 /// cache[(start_pos + t)][row_dim].
 void StoreKv(const float* src, __half* cache, std::uint32_t n_tokens,
              std::uint32_t row_dim, const std::uint32_t* start_pos,
-             hipStream_t stream);
+             hipStream_t stream, KvType kv = KvType::kF16);
 /// Stores raw indexer rows in a power-of-two ring of `capacity` rows.
 void StoreRows(const float* src, float* dst, std::uint32_t n_tokens,
                std::uint32_t row_dim, const std::uint32_t* start_pos,
@@ -571,7 +581,7 @@ void Attention(const float* q, const __half* k_cache, const __half* v_cache,
                std::uint32_t kv_heads, std::uint32_t d, std::uint32_t ratio,
                hipStream_t stream, std::uint32_t* lists = nullptr,
                std::uint32_t* counts = nullptr, std::uint32_t list_capacity = 0,
-               std::uint32_t dense_extent = 0);
+               std::uint32_t dense_extent = 0, KvType kv = KvType::kF16);
 
 /// Maximum visible sparse context for this WMMA geometry, or zero when the
 /// geometry is unsupported. Checkpoint planning uses the same dispatch limit.
@@ -602,7 +612,7 @@ bool WmmaCausalAttention(const float* q, const float* gate,
                          std::uint32_t start_pos, std::uint32_t heads,
                          std::uint32_t kv_heads, std::uint32_t d,
                          std::uint32_t ratio, hipStream_t stream,
-                         bool last_only = false);
+                         bool last_only = false, KvType kv = KvType::kF16);
 
 /// counts[e] = number of (token, slot) pairs routed to expert e.
 void ExpertCounts(const std::int32_t* ids, std::uint32_t* counts,
