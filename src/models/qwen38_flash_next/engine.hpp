@@ -57,6 +57,8 @@ struct ModelOptions {
   /// artifact's own setting, which is always off: no GGUF metadata key sets
   /// it today.
   std::optional<RopeScaling> rope_scaling{};
+  /// Stores trunk and MTP K/V as q8_0 (`--kv-cache-type=q8_0`), not F16.
+  bool q8_kv_cache = false;
 };
 
 class Session;
@@ -118,6 +120,9 @@ public:
   [[nodiscard]] std::size_t ExpandedQ8_0Tensors() const noexcept;
   [[nodiscard]] std::uint32_t DecodeConcurrency() const noexcept {
     return options_.decode_concurrency;
+  }
+  [[nodiscard]] bool Q8KvCache() const noexcept {
+    return options_.q8_kv_cache;
   }
   [[nodiscard]] std::string ModelName() const;
   [[nodiscard]] const Config& config() const noexcept;

@@ -103,6 +103,34 @@ void Check(bool mtp) {
   Require(layout.PrivateBytes() - no_ple_layout.PrivateBytes() == 368640,
           "PLE history inventory is incorrect");
 }
+// A q8_0 KV cache stores each 512-element row as 512 int8 values plus 16 F16
+// block scales (544 bytes); every other component keeps its size.
+void CheckQ8KvRows(bool mtp) {
+  const auto c = ProductionGeometry();
+  const qfn::ContinuationLayout f16(c, mtp, 100000, 8);
+  const qfn::ContinuationLayout q8(c, mtp, 100000, 8, 544);
+  Require(q8.Components().size() == f16.Components().size() &&
+              q8.PrivateBytes() == f16.PrivateBytes(),
+          "q8 KV rows changed the private state inventory");
+  for (std::size_t i = 0; i < q8.Components().size(); ++i) {
+    const auto part = q8.Components()[i].part;
+    const bool kv = part == qfn::ContinuationPart::kKey ||
+                    part == qfn::ContinuationPart::kValue ||
+                    part == qfn::ContinuationPart::kDraftKey ||
+                    part == qfn::ContinuationPart::kDraftValue;
+    Require(q8.Components()[i].descriptor.row_bytes ==
+                (kv ? 544 : f16.Components()[i].descriptor.row_bytes),
+            "q8 KV row size reached a component other than K/V");
+  }
+  const std::uint32_t target = 32768;
+  const auto draft = mtp ? target - 1 : 0;
+  const auto expected =
+      std::size_t{target} * 13828 +
+      (mtp ? std::size_t{draft} * 1088 + std::size_t{draft / 4} * 256 : 0);
+  Require(q8.RowBytes(target, draft, target / 4, draft / 4) == expected,
+          "q8 KV row byte claim differs from independent geometry");
+}
+
 void CheckExtendedContext(bool mtp) {
   const auto native = ProductionGeometry();
   Reject([&] {
@@ -191,6 +219,7 @@ int main() {
     Check(true);
     for (const auto mtp : {false, true}) {
       CheckExtendedContext(mtp);
+      CheckQ8KvRows(mtp);
       CheckBacking(mtp, 32768, 2, 8ULL << 30, 32, 2 * 32768);
       CheckBacking(mtp, 32768, 2, 2ULL << 30, 8, 2 * 4096);
       CheckBacking(mtp, 4096, 8, 8ULL << 30, 8, 8 * 4096);

@@ -1,6 +1,7 @@
 #ifndef GUFO_MODELS_QWEN38_FLASH_NEXT_CONTINUATION_LAYOUT_HPP_
 #define GUFO_MODELS_QWEN38_FLASH_NEXT_CONTINUATION_LAYOUT_HPP_
 
+#include <cstddef>
 #include <cstdint>
 #include <gufo/ext/adapter.hpp>
 #include <gufo/ext/types.hpp>
@@ -50,8 +51,10 @@ using ContinuationBackingClass = cache::BackingClass;
 
 class ContinuationLayout {
 public:
+  // `kv_row_bytes` is one full-attention K or V row as the executor stores
+  // it; zero means F16 rows.
   ContinuationLayout(const Config&, bool mtp, std::uint32_t context,
-                     std::uint32_t kept_rows);
+                     std::uint32_t kept_rows, std::size_t kv_row_bytes = 0);
   [[nodiscard]] std::span<const ContinuationComponent> Components() const {
     return components_;
   }

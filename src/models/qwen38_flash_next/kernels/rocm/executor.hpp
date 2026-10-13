@@ -292,6 +292,8 @@ public:
     /// Largest session context. Zero selects the native context; values
     /// above it require YaRN (Config::MaxContextLength()).
     std::uint32_t max_context{0};
+    /// Storage of the trunk and MTP full-attention K/V caches.
+    KvType kv_type{KvType::kF16};
   };
 
   ~Executor();
@@ -571,6 +573,13 @@ public:
   /// Returns the wide scratch to the driver. Waits for in-flight GPU work;
   /// call it between passes. A no-op while a wide pass runs.
   void ReleaseWidePasses() const;
+  /// Storage of the full-attention K/V caches and the bytes of one cache row
+  /// (one layer's K or V at one position).
+  [[nodiscard]] KvType kv_type() const noexcept { return options_.kv_type; }
+  [[nodiscard]] std::size_t kv_row_bytes() const noexcept {
+    return KvRowHalves(options_.kv_type, config().AttentionKvDim()) *
+           sizeof(__half);
+  }
   [[nodiscard]] std::uint32_t max_speculative() const noexcept {
     return options_.max_speculative;
   }

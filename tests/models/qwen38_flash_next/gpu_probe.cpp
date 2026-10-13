@@ -3,7 +3,7 @@
 //
 // gpu_probe --model FIRST_SHARD.gguf --prompt TEXT [--reference]
 //           [--batch T] [--context N] [--yarn-factor F] [--dump logits.bin]
-//           [--logit-rows N] [--nll nll.bin]
+//           [--logit-rows N] [--nll nll.bin] [--kv-cache-type f16|q8_0]
 // The dump holds the last 64 rows of the final prefill pass, or with
 // --logit-rows the last N rows of every pass in position order. --nll
 // writes each position's negative log likelihood of the next prompt token
@@ -99,6 +99,7 @@ int main(int argc, char** argv) {
   bool decode = false;
   bool mtp_audit = false;
   bool reference = false;
+  bool q8_kv = false;
   bool cost_audit = false;
   bool sampled_head = false;
   std::vector<std::uint32_t> cost_concurrencies;
@@ -172,6 +173,13 @@ int main(int argc, char** argv) {
       decode_ids_path = next();
     } else if (arg == "--reference") {
       reference = true;
+    } else if (arg == "--kv-cache-type") {
+      const auto value = next();
+      if (value != "f16" && value != "q8_0") {
+        std::fprintf(stderr, "--kv-cache-type must be f16 or q8_0\n");
+        return 2;
+      }
+      q8_kv = value == "q8_0";
     } else if (arg == "--batch" || arg == "--context") {
       const auto value = next();
       auto& count = arg == "--batch" ? batch : context;
@@ -329,6 +337,7 @@ int main(int argc, char** argv) {
           ? batch
           : std::min<std::uint32_t>(
                 batch, every_pass_rows != 0 ? every_pass_rows : 64);
+  options.kv_type = q8_kv ? q::rocm::KvType::kQ8 : q::rocm::KvType::kF16;
   if (mtp_audit || cost_audit)
     options.max_speculative = 8;
 

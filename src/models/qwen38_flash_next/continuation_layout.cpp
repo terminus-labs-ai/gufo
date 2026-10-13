@@ -21,8 +21,11 @@ bool IsPool(ContinuationPart part) {
 
 ContinuationLayout::ContinuationLayout(const Config& c, bool mtp,
                                        std::uint32_t context,
-                                       std::uint32_t kept_rows)
+                                       std::uint32_t kept_rows,
+                                       std::size_t kv_row_bytes)
     : context_(context), ratio_(c.compress_ratio), mtp_(mtp) {
+  if (!kv_row_bytes)
+    kv_row_bytes = std::size_t{c.AttentionKvDim()} * 2;  // F16 rows
   if (!context || context > c.MaxContextLength() || !ratio_ ||
       !c.full_attention_interval || !c.num_layers || !c.AttentionKvDim() ||
       !c.indexer_head_dim || !c.indexer_top_k || !c.ssm_conv_kernel ||
@@ -57,9 +60,9 @@ ContinuationLayout::ContinuationLayout(const Config& c, bool mtp,
               sizeof(float),
           layer);
     } else {
-      add(ContinuationPart::kKey, std::size_t{c.AttentionKvDim()} * 2, 0,
+      add(ContinuationPart::kKey, kv_row_bytes, 0,
           layer);
-      add(ContinuationPart::kValue, std::size_t{c.AttentionKvDim()} * 2, 0,
+      add(ContinuationPart::kValue, kv_row_bytes, 0,
           layer);
       add(ContinuationPart::kPooledKeys, std::size_t{c.indexer_head_dim} * 2, 0,
           layer);
@@ -72,8 +75,8 @@ ContinuationLayout::ContinuationLayout(const Config& c, bool mtp,
     add(ContinuationPart::kPleHistory, 0,
         std::size_t{c.PleConvHistory()} * c.HcDim() * sizeof(float));
   if (mtp) {
-    add(ContinuationPart::kDraftKey, std::size_t{c.AttentionKvDim()} * 2, 0);
-    add(ContinuationPart::kDraftValue, std::size_t{c.AttentionKvDim()} * 2, 0);
+    add(ContinuationPart::kDraftKey, kv_row_bytes, 0);
+    add(ContinuationPart::kDraftValue, kv_row_bytes, 0);
     add(ContinuationPart::kDraftPooledKeys, std::size_t{c.indexer_head_dim} * 2,
         0);
     add(ContinuationPart::kDraftRawKeys, 0,
