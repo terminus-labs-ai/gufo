@@ -720,8 +720,9 @@ void PrintServeHelp(std::string_view program_name,
         "(default: 0 = auto, at most the disk budget and 1/8 available RAM)",
         "Cache", &cache_disk_staging_bytes);
     parser.AddOption("", "--kv-cache-type", "TYPE",
-                     "KV cache storage: f16 or q8_0 (q8_0: Qwen3.8-Flash-Next; default: f16)", "Cache",
-                     &kv_cache_type);
+                     "KV cache storage: f16 or q8_0 (q8_0: Qwen3.8-Flash-Next; "
+                     "default: f16)",
+                     "Cache", &kv_cache_type);
     parser.AddFlag("", "--log-progress",
                    "Log live prefill and decode progress (needs "
                    "--log-level=info or debug)",
@@ -1258,7 +1259,8 @@ int RunServe(std::span<const char* const> args) {
         "(default: 0 = auto, at most the disk budget and 1/8 available RAM)",
         "Cache", &cache_disk_staging_bytes);
     llm_parser.AddOption("", "--kv-cache-type", "TYPE",
-                         "KV cache storage: f16 or q8_0 (q8_0: Qwen3.8-Flash-Next; default: f16)",
+                         "KV cache storage: f16 or q8_0 (q8_0: "
+                         "Qwen3.8-Flash-Next; default: f16)",
                          "Cache", &kv_cache_type);
     llm_parser.AddFlag("", "--log-progress",
                        "Log live prefill and decode progress (needs "
@@ -1414,8 +1416,8 @@ int RunServe(std::span<const char* const> args) {
                            .model_artifact_fingerprint = {},
                        },
                        vision_model_path,
-                       server::TextRunnerRamCacheOptions{
-                           .capacity_bytes = cache_ram_bytes},
+                       server::TextRunnerRamCacheOptions{.capacity_bytes =
+                                                             cache_ram_bytes},
                        kv_cache_type == "q8_0")) {
       std::cerr << "Error loading model '" << model << "': " << err << "\n";
       return 1;

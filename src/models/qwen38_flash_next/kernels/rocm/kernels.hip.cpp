@@ -88,8 +88,8 @@ __device__ __forceinline__ uint4 LoadKv(const __half* cache, std::size_t pos,
                       (pos * (width + (width / 16)));
     const uint2 q = *reinterpret_cast<const uint2*>(row + col);
     return make_uint4(
-        q.x, q.y, reinterpret_cast<const unsigned short*>(row + width)[col / 32],
-        0u);
+        q.x, q.y,
+        reinterpret_cast<const unsigned short*>(row + width)[col / 32], 0u);
   }
 }
 template<bool kQ8>
@@ -116,8 +116,8 @@ __device__ __forceinline__ void StoreKvValue(__half* cache, std::size_t pos,
   if constexpr (!kQ8) {
     cache[(pos * width) + col] = __float2half(v);
   } else {
-    auto* row = reinterpret_cast<std::int8_t*>(cache) +
-                (pos * (width + (width / 16)));
+    auto* row =
+        reinterpret_cast<std::int8_t*>(cache) + (pos * (width + (width / 16)));
     float amax = fabsf(v);
     for (int offset = 16; offset > 0; offset >>= 1)
       amax = fmaxf(amax, __shfl_xor(amax, offset, 32));
@@ -3289,8 +3289,8 @@ __launch_bounds__(256, 2) __global__ void WmmaCausalAttentionKernel(
   static_assert(kKRegs * 256 == kKeys * (kHeadDim / 8), "K stages evenly");
   const std::uint32_t v_key = lane % kKeys;
   const std::uint32_t v_slice = (tid / kKeys) * (kVRegs * 8);
-  const std::size_t v_col = (static_cast<std::size_t>(kv_head) * kHeadDim) +
-                            v_slice;
+  const std::size_t v_col =
+      (static_cast<std::size_t>(kv_head) * kHeadDim) + v_slice;
   const std::size_t k_col = static_cast<std::size_t>(kv_head) * kHeadDim;
 
   // Registers hold raw cache words; KvHalves expands them at LDS staging.
@@ -3312,9 +3312,9 @@ __launch_bounds__(256, 2) __global__ void WmmaCausalAttentionKernel(
       const std::uint32_t key_position = tile_key(tile, idx / (kHeadDim / 8));
       const std::uint32_t d8 = (idx % (kHeadDim / 8)) * 8;
       const bool live = key_position < context_end;
-      dst[n] = live ? LoadKv<kQ8>(k_cache, key_position, kWmmaKvWidth,
-                                  k_col + d8)
-                    : make_uint4(0u, 0u, 0u, 0u);
+      dst[n] =
+          live ? LoadKv<kQ8>(k_cache, key_position, kWmmaKvWidth, k_col + d8)
+               : make_uint4(0u, 0u, 0u, 0u);
     }
   };
 
@@ -6228,11 +6228,10 @@ void Attention(const float* q, const __half* k_cache, const __half* v_cache,
     return;  // the kernel is written for the model's 256-wide heads
   }
   const std::uint32_t z = partials != nullptr ? std::max(splits, 1u) : 1u;
-  hipLaunchKernelGGL(kv == KvType::kQ8 ? AttentionKernel<true>
-                                       : AttentionKernel<false>,
-                     dim3(heads, n_tokens, z), dim3(kThreads), 0, stream, q,
-                     k_cache, v_cache, mask, mask_words, out, partials,
-                     start_pos, heads, kv_heads, d, ratio);
+  hipLaunchKernelGGL(
+      kv == KvType::kQ8 ? AttentionKernel<true> : AttentionKernel<false>,
+      dim3(heads, n_tokens, z), dim3(kThreads), 0, stream, q, k_cache, v_cache,
+      mask, mask_words, out, partials, start_pos, heads, kv_heads, d, ratio);
   if (z > 1) {
     hipLaunchKernelGGL(AttentionMergeKernel, dim3(heads, n_tokens),
                        dim3(kThreads), 0, stream, partials, out, heads, d, z);
@@ -6263,18 +6262,17 @@ bool LaunchWmmaCausalAttention(const float* q, const float* gate,
     // At deep sparse windows, staging the current V before fetching the
     // next one shortens their overlapping register lifetimes.
     if (start_pos >= 65536) {
-      hipLaunchKernelGGL(
-          (WmmaCausalAttentionKernel<kPackedQueries, kWmmaKeys, true, true,
-                                     kQ8>),
-          grid, dim3(kThreads), 0, stream, q, gate, k_cache, v_cache, mask,
-          mask_words, out, start_pos, n_tokens, first_group);
+      hipLaunchKernelGGL((WmmaCausalAttentionKernel<kPackedQueries, kWmmaKeys,
+                                                    true, true, kQ8>),
+                         grid, dim3(kThreads), 0, stream, q, gate, k_cache,
+                         v_cache, mask, mask_words, out, start_pos, n_tokens,
+                         first_group);
     } else {
-      hipLaunchKernelGGL(
-          (WmmaCausalAttentionKernel<kPackedQueries, kWmmaKeys, true, false,
-                                     kQ8>),
-          grid,
-          dim3(kThreads), 0, stream, q, gate, k_cache, v_cache, mask,
-          mask_words, out, start_pos, n_tokens, first_group);
+      hipLaunchKernelGGL((WmmaCausalAttentionKernel<kPackedQueries, kWmmaKeys,
+                                                    true, false, kQ8>),
+                         grid, dim3(kThreads), 0, stream, q, gate, k_cache,
+                         v_cache, mask, mask_words, out, start_pos, n_tokens,
+                         first_group);
     }
     return true;
   }
@@ -6284,8 +6282,7 @@ bool LaunchWmmaCausalAttention(const float* q, const float* gate,
       (n_tokens + kWmmaQueryRows - 1) / kWmmaQueryRows - first_group,
       kWmmaKvHeads * (kWmmaGqa / kWmmaHeads));
   hipLaunchKernelGGL(
-      (WmmaCausalAttentionKernel<kWmmaQueryRows, kWmmaKeys, false, false,
-                                 kQ8>),
+      (WmmaCausalAttentionKernel<kWmmaQueryRows, kWmmaKeys, false, false, kQ8>),
       grid, dim3(kThreads), 0, stream, q, gate, k_cache, v_cache, mask,
       mask_words, out, start_pos, n_tokens, first_group);
   return true;
@@ -6299,10 +6296,13 @@ bool WmmaCausalAttention(const float* q, const float* gate,
                          std::uint32_t kv_heads, std::uint32_t d,
                          std::uint32_t ratio, hipStream_t stream,
                          bool last_only, KvType kv) {
-  return (kv == KvType::kQ8 ? LaunchWmmaCausalAttention<true>
-                            : LaunchWmmaCausalAttention<false>)(
-      q, gate, k_cache, v_cache, mask, mask_words, out, n_tokens, start_pos,
-      heads, kv_heads, d, ratio, stream, last_only);
+  return (kv == KvType::kQ8
+              ? LaunchWmmaCausalAttention<true>
+              : LaunchWmmaCausalAttention<false>)(q, gate, k_cache, v_cache,
+                                                  mask, mask_words, out,
+                                                  n_tokens, start_pos, heads,
+                                                  kv_heads, d, ratio, stream,
+                                                  last_only);
 }
 
 __global__ void ExpertCountsKernel(const std::int32_t* ids,

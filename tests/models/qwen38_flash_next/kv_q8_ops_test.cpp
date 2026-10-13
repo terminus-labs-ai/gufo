@@ -134,8 +134,8 @@ void RunAt(std::uint32_t start) {
   pos.Up({0});
   const auto keys = Values(start * std::size_t{kKvWidth}, 7, 1.0F);
   const auto values = Values(start * std::size_t{kKvWidth}, 9, 1.0F);
-  for (auto [host, c16, c8] : {std::tuple{&keys, &k16, &k8},
-                               std::tuple{&values, &v16, &v8}}) {
+  for (auto [host, c16, c8] :
+       {std::tuple{&keys, &k16, &k8}, std::tuple{&values, &v16, &v8}}) {
     Check(hipMemcpy(src.p, host->data(), host->size() * sizeof(float),
                     hipMemcpyHostToDevice),
           "upload rows");
@@ -166,13 +166,13 @@ void RunAt(std::uint32_t start) {
       g16.Down(0, g16.n) != g8.Down(0, g8.n))
     throw std::runtime_error("q8 preparation changed queries or gates");
   std::vector<float> want;
-  for (const auto& h : k16.Down(start * std::size_t{kKvWidth},
-                                std::size_t{kBatch} * kKvWidth))
+  for (const auto& h :
+       k16.Down(start * std::size_t{kKvWidth}, std::size_t{kBatch} * kKvWidth))
     want.push_back(__half2float(h));
   ExpectStored(want, k8, start, ("PrepareAttention keys" + at).c_str());
   want.clear();
-  for (const auto& h : v16.Down(start * std::size_t{kKvWidth},
-                                std::size_t{kBatch} * kKvWidth))
+  for (const auto& h :
+       v16.Down(start * std::size_t{kKvWidth}, std::size_t{kBatch} * kKvWidth))
     want.push_back(__half2float(h));
   ExpectStored(want, v8, start, ("PrepareAttention values" + at).c_str());
 
@@ -219,12 +219,12 @@ void RunAt(std::uint32_t start) {
                            nullptr, k16.p, v16.p, 3, 0, kKvHeads, kDim, 64,
                            pos.p, 1e7F, 1e-6F, nullptr) ||
       !q::PrepareAttention(packed.p, 2 * kKvWidth, nullptr, gamma.p, nullptr,
-                           nullptr, k8.p, v8.p, 3, 0, kKvHeads, kDim, 64,
-                           pos.p, 1e7F, 1e-6F, nullptr, nullptr, false,
+                           nullptr, k8.p, v8.p, 3, 0, kKvHeads, kDim, 64, pos.p,
+                           1e7F, 1e-6F, nullptr, nullptr, false,
                            q::KvType::kQ8))
     throw std::runtime_error("draft preparation rejected the geometry");
-  q::Attention(q16.p, k16.p, v16.p, nullptr, words, o16.p, parts.p, 8, 3,
-               pos.p, kHeads, kKvHeads, kDim, kRatio, nullptr);
+  q::Attention(q16.p, k16.p, v16.p, nullptr, words, o16.p, parts.p, 8, 3, pos.p,
+               kHeads, kKvHeads, kDim, kRatio, nullptr);
   q::Attention(q16.p, k8.p, v8.p, nullptr, words, o8.p, parts.p, 8, 3, pos.p,
                kHeads, kKvHeads, kDim, kRatio, nullptr, q::KvType::kQ8);
   ExpectClose(o16, o8, 3 * kQWidth, "MTP draft attention" + at);
