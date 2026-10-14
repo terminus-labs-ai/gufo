@@ -75,7 +75,7 @@ def run(args, kv_type, label, prompt, expect_store):
                 time.sleep(2)
         begin = time.time()
         reply = http(port, "/v1/completions",
-                     {"prompt": prompt, "max_tokens": 16, "temperature": 0})
+                     {"prompt": prompt, "max_tokens": 256, "temperature": 0})
         elapsed = time.time() - begin
         if expect_store:
             assert wait_for(log_path, r"event=disk_cache action=stored", 600), (
@@ -88,7 +88,7 @@ def run(args, kv_type, label, prompt, expect_store):
             "gpu_device_used_mib": int(fields.get("gpu_device_used_mib", 0)),
             "text": reply["choices"][0]["text"], "usage": reply["usage"],
             "request_seconds": round(elapsed, 1),
-            "restored": "event=disk_cache action=restored" in text,
+            "restored": " cache=disk " in text,
             "log": log_path,
         }
     finally:
