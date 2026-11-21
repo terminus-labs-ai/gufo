@@ -31,9 +31,9 @@ int qfn_mmq_q4_K_moe_pair_unique(const void* W_a, const void* W_b,
                                  int n_tokens, int n_experts, int n_expert_used,
                                  hipStream_t stream);
 
-// Routed vector projection for GGML Q4_K/Q5_K/Q5_1/Q8_0. Optional paired
-// weights use the same shape, routing and quantized input; both outputs are
-// [n_tokens][n_expert_used][M]. W_b and out_b must be supplied together.
+// Routed vector projection for GGML Q4_K/Q5_K/Q5_1/Q8_0/IQ3_S/IQ4_XS/IQ4_NL.
+// Optional paired weights use the same shape, routing and quantized input;
+// both outputs are [n_tokens][n_expert_used][M]. W_b and out_b must be supplied together.
 int qfn_mmq_moe_vec(int weight_type, const void* W, const float* X_f32,
                     const int32_t* ids, float* out, int M, int K, int n_tokens,
                     int n_experts, int n_expert_used, hipStream_t stream,
@@ -89,5 +89,24 @@ int qfn_mmq_q5_K_moe_raw(
     const void * W, const float * X_f32, const int32_t * ids, float * out,
     int M, int K, int n_tokens, int n_experts, int n_expert_used,
     hipStream_t stream);
+
+int qfn_mmq_iq3_s_moe_raw(
+    const void * W, const float * X_f32, const int32_t * ids, float * out,
+    int M, int K, int n_tokens, int n_experts, int n_expert_used,
+    hipStream_t stream);
+
+int qfn_mmq_iq4_xs_moe_raw(
+    const void * W, const float * X_f32, const int32_t * ids, float * out,
+    int M, int K, int n_tokens, int n_experts, int n_expert_used,
+    hipStream_t stream);
+
+int qfn_mmq_iq4_nl_moe_raw(
+    const void * W, const float * X_f32, const int32_t * ids, float * out,
+    int M, int K, int n_tokens, int n_experts, int n_expert_used,
+    hipStream_t stream);
+
+// Re-encodes n Q6_K elements (a multiple of 256) as Q8_0 on the device.
+int qfn_mmq_q6_K_to_q8_0(const void * src, void * dst, int64_t n,
+                         hipStream_t stream);
 
 }

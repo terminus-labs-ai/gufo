@@ -18,6 +18,10 @@ gufo model install flash-next-q4
 
 It installs all three and prints the MTP head's path.
 
+Other quantizations of the same checkpoint also load when their routed experts
+are Q4_K, Q5_K, Q6_K, Q5_1, Q8_0, IQ3_S, IQ4_XS or IQ4_NL, such as
+`UD-IQ4_XS/*`. A Q6_K output head is converted to Q8_0 when it is uploaded.
+
 ## Run
 
 Pass the model ID, or the path of the first shard; Gufo finds the others.
