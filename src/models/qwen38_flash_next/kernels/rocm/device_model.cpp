@@ -606,6 +606,9 @@ std::unique_ptr<DeviceModel> DeviceModel::Upload(
     head_q6 = m->output_.data;
     m->output_.data = q8;
     m->output_.type = core::GgmlType::kQ8_0;
+    // Row-addressed readers (output_row_bytes(), SetDraftVocab) must see
+    // the Q8_0 layout, not the Q6_K source size.
+    m->output_bytes_ = size;
     m->max_q8_cols_ = std::max<std::size_t>(m->max_q8_cols_, w.output.cols);
   }
   const auto status = hipDeviceSynchronize();
