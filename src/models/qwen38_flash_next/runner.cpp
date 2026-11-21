@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <optional>
 #include <span>
@@ -20,6 +21,7 @@
 #include "gufo/ext/gguf_identity.hpp"
 #include "gufo/ext/host.hpp"
 #include "gufo/ext/host_budget.hpp"
+#include "gufo/ext/options.hpp"
 #include "src/families/qwen/control_tokens/control_tokens.hpp"
 #include "src/families/qwen/text/chat_template.hpp"
 #include "src/families/qwen/text/tokenizer.hpp"
@@ -276,7 +278,8 @@ public:
           use_mtp_, max_context_, max_draft_tokens_,
           model_->DecodeConcurrency(),
           models::qwen38_flash_next::RopePositionPolicy(
-              model_->config().rope_scaling));
+              model_->config().rope_scaling),
+          model_->Q8KvCache());
     } else {
       component_identity_ = QwenFlashNextProcessIdentity(
           model_.get(), max_context_, use_mtp_, max_draft_tokens_,
@@ -873,6 +876,16 @@ std::shared_ptr<ext::TextModelRunner> CreateQwenFlashNextTextRunner(
                           options.enable_yarn, &rope_scaling, error)) {
     return nullptr;
   }
+  bool q8_kv_cache = false;
+  if (const auto* kv = ext::FindOption<std::string>(options.provider_options,
+                                                    "--kv-cache-type")) {
+    if (*kv != "f16" && *kv != "q8_0") {
+      if (error)
+        *error = "--kv-cache-type must be f16 or q8_0";
+      return nullptr;
+    }
+    q8_kv_cache = *kv == "q8_0";
+  }
   const bool use_mtp =
       options.speculative.backend == ext::TextSpeculativeBackend::kMtp;
   if (options.speculative.backend != ext::TextSpeculativeBackend::kDisabled &&
@@ -899,6 +912,7 @@ std::shared_ptr<ext::TextModelRunner> CreateQwenFlashNextTextRunner(
           .decode_concurrency =
               DecodeConcurrencyForSessions(options.session_count),
           .rope_scaling = rope_scaling,
+          .q8_kv_cache = q8_kv_cache,
       },
       &load_error);
   if (!model) {
@@ -906,6 +920,13 @@ std::shared_ptr<ext::TextModelRunner> CreateQwenFlashNextTextRunner(
       *error = "Failed to load Flash-Next model: " + load_error;
     return nullptr;
   }
+  // Names the K/V storage and its per-session cost once at load.
+  std::fprintf(
+      stderr, "qwen38_flash_next: kv_cache_type=%s session_state_bytes=%zu\n",
+      q8_kv_cache ? "q8_0" : "f16",
+      model->SessionBytes(use_mtp ? gufo::core::SessionMode::kSpeculative
+                                  : gufo::core::SessionMode::kAutoregressive,
+                          max_context));
   try {
     models::qwen::vision::PrepareForServing(model->VisionEncoder());
   } catch (const std::exception& e) {

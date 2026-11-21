@@ -30,6 +30,17 @@ void FlashCases() {
   }
   Golden("artifact", QwenFlashNextCompatibilityIdentity(
                          draft, artifact, true, 4096, 4, 1, "absolute-v1"));
+  // A q8_0 KV cache appends its type after the target fields and leaves the
+  // F16 identity (the goldens above) unchanged.
+  for (bool mtp : {false, true}) {
+    const auto f16 = Text(QwenFlashNextCompatibilityIdentity(
+        artifact, draft, mtp, 4096, 4, 1, "absolute-v1"));
+    const auto q8 = Text(QwenFlashNextCompatibilityIdentity(
+        artifact, draft, mtp, 4096, 4, 1, "absolute-v1", true));
+    const auto at = f16.find("adapters=none\n") + 14;
+    Require(q8 == f16.substr(0, at) + "kv_cache_type=q8_0\n" + f16.substr(at),
+            "q8_0 KV cache identity serialization changed");
+  }
 }
 
 void Validation() {

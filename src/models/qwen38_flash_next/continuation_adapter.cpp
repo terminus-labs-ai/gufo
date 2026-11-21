@@ -240,8 +240,6 @@ ContinuationAdapter::ContinuationAdapter(std::shared_ptr<Model> model,
   put(model_->executor_->max_speculative());
   put(model_->PrefillCapacity());
   put(model_->DecodeConcurrency());
-  // Cached K/V rows are only valid in the storage they were written in.
-  put(static_cast<std::uint32_t>(model_->executor_->kv_type()));
   for (const auto& component : layout_.Components())
     descriptors_.push_back(component.descriptor);
 }

@@ -50,6 +50,8 @@ def main():
         check(["serve", modality, "--served-model-name", "dup",
                "--served-model-name", "dup", "--model", "missing.gguf"], 2,
               "duplicate --served-model-name")
+    # Flash-Next declares --kv-cache-type as a provider option.
+    check(["serve", "llm", "--help"], 0, "--kv-cache-type")
     check(["serve", "image"], 2, "--model <DIR> is required")
     # Image provider options come from manifests of built, available providers
     # (#974). Undeclared spellings stay usage errors before any model loads,

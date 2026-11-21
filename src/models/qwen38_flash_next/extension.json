@@ -92,6 +92,17 @@
         "flash-next-q4"
       ],
       "help": "MTP draft model path for speculative decoding"
+    },
+    {
+      "name": "--kv-cache-type",
+      "type": "string",
+      "commands": [
+        "serve"
+      ],
+      "providers": [
+        "flash-next-q4"
+      ],
+      "help": "Full-attention K/V cache storage: f16 (default) or q8_0"
     }
   ],
   "targets": {

@@ -1,0 +1,8 @@
+{
+  "filler": "The grass is green. The sky is blue. The sun is yellow. Here we go. There and back again. ",
+  "repeat": 8400,
+  "needle_at": 0.37,
+  "needle": "The secret passphrase is VERMILION-OTTER-4127. Remember it. ",
+  "question": "\nWhat is the secret passphrase mentioned in the text above? The secret passphrase is",
+  "answer": "VERMILION-OTTER-4127"
+}
