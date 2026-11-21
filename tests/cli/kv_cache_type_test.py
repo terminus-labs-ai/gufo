@@ -78,8 +78,8 @@ def run(args, kv_type, label, prompt, expect_store):
                      {"prompt": prompt, "max_tokens": 256, "temperature": 0})
         elapsed = time.time() - begin
         if expect_store:
-            assert wait_for(log_path, r"event=disk_cache action=stored", 600), (
-                f"{label}: no checkpoint stored")
+            assert wait_for(log_path, r"\[cache\].* event=published ", 600), (
+                f"{label}: no checkpoint published")
         text = open(log_path, errors="replace").read()
         fields = dict(re.findall(r"(\w+)=(\S+)", loaded.group(0)))
         kv_line = re.search(r"qwen38_flash_next: kv_cache_type=\S+ "
