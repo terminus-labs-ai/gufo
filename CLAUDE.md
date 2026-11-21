@@ -2,62 +2,39 @@
 
 # gxs local build (Normandy)
 
-Branch `gxs` ports UD-IQ4_XS support onto upstream `main` `fd747a5`
-(`v0.9.1` + #485).
-Spec: `/data/obsidian/topics/homelab/normandy-sr2/specs/gxs.md`. Never push
-this branch to any remote.
+Branch `gxs-<upstream-short>` carries the gxs changes (UD-IQ4_XS routed experts, Q6_K -> Q8_0 head, q8_0 KV cache) on upstream `main`. Spec: `/data/obsidian/topics/homelab/normandy-sr2/specs/gxs.md`. The branch lives in `terminus-labs-ai/gufo`; the IQ experts part goes upstream separately.
 
-Nix is not installed here. Every build and test command runs inside the
-`gufo-dev:rocm7.2.3-gcc15.3` container (ROCm 7.2.3, GCC 15.3.0; the host keeps
-ROCm 7.2.2). The Dockerfile and wrapper live in
-`~/git/normandy-sr2/gufo-dev/`. The wrapper mounts `${GUFO_SRC:-~/git/gufo}`
-as its working directory, the Flash-Next models (read-only) and
-`/data/artifacts/normandy-sr2/gxs`, and passes through only the Strix Halo
-iGPU (gfx1151). It ignores the current directory: for a worktree, run
-`GUFO_SRC=<worktree> $RUN ...`, or it silently builds `~/git/gufo`.
+Build and test with upstream's flake toolchain, inside a `nixos/nix` container on Normandy: the host has no Nix. The wrapper is `normandy-sr2/gufo-nix/run.sh`; Normandy keeps a copy at `/data/worktrees/gufo/nixrun.sh`. It runs as root in rootful Podman, keeps `/nix` in the `gufo-nix` volume, mounts `$GUFO_SRC` at its own path, the models (read-only) and `/data/artifacts/normandy-sr2`, and passes through only the Strix Halo iGPU (gfx1151). `GUFO_SRC` is required.
 
 ```sh
-RUN=~/git/normandy-sr2/gufo-dev/run.sh   # run from ~/git/gufo
+RUN="env GUFO_SRC=$PWD /data/worktrees/gufo/nixrun.sh"   # from the checkout
 
-# Image (only when the Dockerfile changes)
-docker build -t gufo-dev:rocm7.2.3-gcc15.3 ~/git/normandy-sr2/gufo-dev
-
-# Configure and build
-$RUN cmake --preset gpu-test
-$RUN cmake --build --preset gpu-test --parallel 24
-
-# Unit test (one target)
-$RUN cmake --build --preset gpu-test --target <test-target>
-$RUN ctest --preset gpu-full -R '^<test-name>$' --output-on-failure
-
-# Full suite
-$RUN ctest --preset gpu-fast --output-on-failure
+$RUN nix develop -c cmake --preset gpu-test
+$RUN nix develop -c cmake --build --preset gpu-test --parallel 24 -- -k 0
+$RUN nix develop -c ctest --preset gpu-full -R '^<test-name>$' --output-on-failure
+$RUN nix develop -c ctest --preset gpu-fast --output-on-failure        # full suite
+$RUN nix shell --inputs-from . nixpkgs#clang-tools nixpkgs#python3 -c python3 tools/ci/check-format.py
+$RUN nix build .#release --out-link /data/artifacts/normandy-sr2/<session>/result-release
 ```
 
-Stop production Gufo before GPU tests or probes: `docker stop gufo`. Leave it
-stopped if it was already down.
+Stop production Gufo before GPU tests or probes (`sudo systemctl stop gufo`) and start it again afterwards; leave it stopped if it was already down. Build output is root-owned.
 
-`gpu-fast` baseline in gufo-dev: unmodified `fd747a5` has 124 tests, 121 pass,
-3 skipped; `gxs` adds `qwen38_flash_next.iq_projection_ops` for 125 tests, 122
-pass, 3 skipped. The skips are `qwen3_tts_loader_test`,
-`qwen3_tts_tokenizer_test` and `qwen3_tts_reference_artifacts_test` (Qwen3-TTS
-artifacts absent). Any other skip or failure is a regression. This needs the
-112 B `GdnRowSplitKernel` scratch allowance in `tools/ci/kernel-resources.json`:
-upstream made that file with Nix AMD clang 22, and gufo-dev (ROCm 7.2.3, GCC
-15.3, its clang) differs. The same file holds the gxs allowances for the 54 IQ
-`qfn_mmq::mul_mat_q` kernels (ggml types 20, 21 and 23) at their measured scratch.
+`gpu-fast` on `9cde650f` + gxs: 262 tests, 253 pass, 6 skipped (three Qwen3-TTS artifact tests, three NPU device tests: the wrapper passes no NPU). Three failures also fail on unmodified upstream with this toolchain and are not gxs regressions: `qwen_image_21_weight_upload_test` (does not compile), `persistent_deltanet_test` (hipMemcpy invalid argument) and `kernel_resources_test` (nine non-gxs kernels over upstream's allowances). Any other failure is a regression.
+
+`tools/ci/kernel-resources.json` is upstream's file plus the 54 IQ `qfn_mmq::mul_mat_q` kernels (ggml types 20, 21 and 23), measured from the release package with `tools/ci/check-kernel-resources.py <result>/bin/.gufo-wrapped --write-baseline`. `bin/gufo` is a wrapper script; the ELF is `.gufo-wrapped`.
 
 ## Reference probe
 
 ```sh
-$RUN cmake --build --preset gpu-test --target qwen38_flash_next_gpu_probe
-$RUN build/gpu-test/tests/models/qwen38_flash_next/qwen38_flash_next_gpu_probe \
+$RUN nix develop -c cmake --build --preset gpu-test --target qwen38_flash_next_gpu_probe
+$RUN nix develop -c build/gpu-test/tests/models/qwen38_flash_next/qwen38_flash_next_gpu_probe \
   --model <first shard .gguf> \
   --prompt-file tests/models/qwen38_flash_next/data/gxs-probe-prompt.txt \
-  --reference
+  --reference [--kv-cache-type q8_0]
 ```
 
-Models: `/data/ai-stack/llm/models/qwen3.8-flash-next/{UD-IQ4_XS,UD-Q4_K_XL,MTP}/`.
-The probe compares only the last `min(batch, 64)` prompt positions against
-the CPU F32 reference (`max_logit_rows`). The fixed prompt fits one 512-token
-batch. Baseline output: `/data/artifacts/normandy-sr2/gxs/baseline/`.
+Models: `/data/ai-stack/llm/models/qwen3.8-flash-next/{UD-IQ4_XS,MTP}/`; production uses the `-of-00003` UD-IQ4_XS shards. The probe compares the last 64 prompt positions against the CPU F32 reference. On `9cde650f` + gxs: f16 58/64 top-1, mean KL 0.0250; q8_0 60/64, mean KL 0.0259.
+
+## Live KV type check
+
+`tests/cli/kv_cache_type_test.py GUFO MODEL MTP_MODEL CACHE_DIR OUT_JSON` serves a ~200K-token needle at 262K context in f16, q8_0, then f16 again, and checks that a disk checkpoint never crosses KV types. Give it an empty cache directory.
