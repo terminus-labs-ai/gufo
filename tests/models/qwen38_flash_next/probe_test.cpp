@@ -72,10 +72,9 @@ bool Probe(const std::vector<Tensor>& tensors,
 void CheckExpertFormats() {
   for (const auto* role : {"gate", "up", "down"}) {
     const auto name = std::string("blk.47.ffn_") + role + "_exps.weight";
-    for (const auto type :
-         {GgmlType::kQ4_K, GgmlType::kQ5_K, GgmlType::kQ6_K, GgmlType::kQ5_1,
-          GgmlType::kQ8_0, GgmlType::kIQ3_S, GgmlType::kIQ4_XS,
-          GgmlType::kIQ4_NL}) {
+    for (const auto type : {GgmlType::kQ4_K, GgmlType::kQ5_K, GgmlType::kQ6_K,
+                            GgmlType::kQ5_1, GgmlType::kQ8_0, GgmlType::kIQ3_S,
+                            GgmlType::kIQ4_XS, GgmlType::kIQ4_NL}) {
       Require(Probe({{name, type}}), "supported expert format declined");
     }
     for (const auto type : {GgmlType::kF16, GgmlType::kQ2_K}) {

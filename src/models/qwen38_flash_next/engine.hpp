@@ -121,9 +121,7 @@ public:
   [[nodiscard]] std::uint32_t DecodeConcurrency() const noexcept {
     return options_.decode_concurrency;
   }
-  [[nodiscard]] bool Q8KvCache() const noexcept {
-    return options_.q8_kv_cache;
-  }
+  [[nodiscard]] bool Q8KvCache() const noexcept { return options_.q8_kv_cache; }
   [[nodiscard]] std::string ModelName() const;
   [[nodiscard]] const Config& config() const noexcept;
   [[nodiscard]] const tokenization::QwenTokenizer& tokenizer() const noexcept {

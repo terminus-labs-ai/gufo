@@ -60,10 +60,8 @@ ContinuationLayout::ContinuationLayout(const Config& c, bool mtp,
               sizeof(float),
           layer);
     } else {
-      add(ContinuationPart::kKey, kv_row_bytes, 0,
-          layer);
-      add(ContinuationPart::kValue, kv_row_bytes, 0,
-          layer);
+      add(ContinuationPart::kKey, kv_row_bytes, 0, layer);
+      add(ContinuationPart::kValue, kv_row_bytes, 0, layer);
       add(ContinuationPart::kPooledKeys, std::size_t{c.indexer_head_dim} * 2, 0,
           layer);
       add(ContinuationPart::kRawKeys, 0,

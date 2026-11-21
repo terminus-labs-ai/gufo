@@ -92,7 +92,7 @@ Weights MakeWeights(GgmlType type, std::size_t rows, std::size_t k,
   return w;
 }
 
-template <typename T>
+template<typename T>
 T* Upload(const std::vector<T>& host) {
   T* device = nullptr;
   CheckHip(hipMalloc(&device, host.size() * sizeof(T) + 4096), "hipMalloc");
@@ -103,12 +103,12 @@ T* Upload(const std::vector<T>& host) {
   return device;
 }
 
-template <typename T>
+template<typename T>
 std::vector<T> Download(const T* device, std::size_t count) {
   std::vector<T> host(count);
-  CheckHip(hipMemcpy(host.data(), device, count * sizeof(T),
-                     hipMemcpyDeviceToHost),
-           "download");
+  CheckHip(
+      hipMemcpy(host.data(), device, count * sizeof(T), hipMemcpyDeviceToHost),
+      "download");
   return host;
 }
 
@@ -172,7 +172,8 @@ bool Check(GgmlType type, Path path, int rows, int used, int experts, int m,
     for (std::size_t s = 0; s < ids.size(); ++s) {
       const std::size_t t = s / used;
       for (int row = 0; row < m; ++row) {
-        const float* wr = w[p].values.data() + (std::size_t(ids[s]) * m + row) * k;
+        const float* wr =
+            w[p].values.data() + (std::size_t(ids[s]) * m + row) * k;
         double ref = 0.0;
         for (int i = 0; i < k; ++i)
           ref += double(wr[i]) * x[t * k + i];
@@ -196,9 +197,9 @@ bool Check(GgmlType type, Path path, int rows, int used, int experts, int m,
             << (path == Path::kTiled        ? "tiled"
                 : path == Path::kVectorPair ? "vector pair"
                                             : "vector")
-            << " rows=" << rows << " used=" << used << " m=" << m
-            << " k=" << k << ": worst |GPU - F64| " << worst << " (scale "
-            << scale << ")" << (ok ? "" : " FAILED") << '\n';
+            << " rows=" << rows << " used=" << used << " m=" << m << " k=" << k
+            << ": worst |GPU - F64| " << worst << " (scale " << scale << ")"
+            << (ok ? "" : " FAILED") << '\n';
   return ok;
 }
 
@@ -212,15 +213,19 @@ bool CheckFormat(GgmlType type, std::uint32_t seed) {
   bool ok = true;
   for (int tokens : {1, 4, 8}) {
     ok = Check(type, Path::kVectorPair, tokens, used, experts, ff, hidden,
-               seed + tokens) && ok;
+               seed + tokens) &&
+         ok;
     ok = Check(type, Path::kVector, tokens * used, 1, experts, 256, down_k,
-               seed + 100 + tokens) && ok;
+               seed + 100 + tokens) &&
+         ok;
   }
   for (int tokens : {64, 512}) {
     ok = Check(type, Path::kTiled, tokens, used, experts, ff, hidden,
-               seed + tokens) && ok;
+               seed + tokens) &&
+         ok;
     ok = Check(type, Path::kTiled, tokens * used, 1, experts, 256, down_k,
-               seed + 100 + tokens) && ok;
+               seed + 100 + tokens) &&
+         ok;
   }
   return ok;
 }
@@ -283,12 +288,11 @@ bool CheckUploadRejectsQ6K() {
   const auto rejected = [&](const fn::ModelWeights& w,
                             const std::string& name) {
     std::string message;
-    const bool ok =
-        fn::rocm::DeviceModel::Upload(w, *reader, nullptr, nullptr, &message) ==
-            nullptr &&
-        message == "unsupported HIP tensor format Q6_K: " + name;
-    std::cout << "Q6_K " << name << ": " << (ok ? "rejected" : "FAILED")
-              << " (" << message << ")\n";
+    const bool ok = fn::rocm::DeviceModel::Upload(w, *reader, nullptr, nullptr,
+                                                  &message) == nullptr &&
+                    message == "unsupported HIP tensor format Q6_K: " + name;
+    std::cout << "Q6_K " << name << ": " << (ok ? "rejected" : "FAILED") << " ("
+              << message << ")\n";
     return ok;
   };
   bool ok = true;

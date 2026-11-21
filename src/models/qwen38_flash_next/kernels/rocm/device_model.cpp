@@ -419,8 +419,8 @@ void LogFormats(const ModelWeights& w, const MtpWeights* mtp,
   std::string gate, up, down;
   const auto add = [](std::string& names, const TensorRef& t) {
     const std::string name(core::ToString(t.type));
-    if (!t.empty() && ("/" + names + "/").find("/" + name + "/") ==
-                          std::string::npos)
+    if (!t.empty() &&
+        ("/" + names + "/").find("/" + name + "/") == std::string::npos)
       names += (names.empty() ? "" : "/") + name;
   };
   const auto layer = [&](const LayerWeights& l) {
